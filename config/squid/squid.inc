@@ -210,9 +210,11 @@ function squid_install_command() {
 	/* create cache */
 	update_status("Creating squid cache pools... One moment please...");
 	squid_dash_z();
-	/* make sure pinger is executable */
+	/* make sure pinger is executable and suid root */
+	// XXX: Bug #5114
 	if(file_exists(SQUID_LOCALBASE . "/libexec/squid/pinger"))
 		exec("/bin/chmod a+x " . SQUID_LOCALBASE . "/libexec/squid/pinger");
+		exec("/bin/chmod u+s " . SQUID_LOCALBASE . "/libexec/squid/pinger");
 	if(file_exists(SQUID_LOCALBASE . "/etc/rc.d/squid"))
 		exec("/bin/rm " . SQUID_LOCALBASE . "/etc/rc.d/squid");
 	squid_write_rcfile();
@@ -541,9 +543,15 @@ function squid_validate_auth($post, &$input_errors) {
 }
 
 function squid_install_cron($should_install) {
-	global $config, $g;
-	if($g['booting']==true) 
+	global $g, $config;
+	if (function_exists("platform_booting")) {
+		if (platform_booting()) {
+			return;
+		}
+	} elseif ($g['booting']) {
 		return;
+	}
+
 	$rotate_is_installed = false;
 	$swapstate_is_installed = false;
 	if(!$config['cron']['item'])
@@ -969,6 +977,16 @@ EOD;
 function squid_resync_auth() {
 	global $config, $valid_acls;
 
+	if (!is_array($config['installedpackages']['squidauth'])) {
+		$config['installedpackages']['squidauth']['config'][0] = array();
+	}
+	if (!is_array($config['installedpackages']['squidnac'])) {
+		$config['installedpackages']['squidnac']['config'][0] = array();
+	}
+	if (!is_array($config['installedpackages']['squid'])) {
+		$config['installedpackages']['squid']['config'][0] = array();
+	}
+
 	$settings = $config['installedpackages']['squidauth']['config'][0];
 	$settingsnac = $config['installedpackages']['squidnac']['config'][0];
 	$settingsconfig = $config['installedpackages']['squid']['config'][0];
@@ -1146,9 +1164,11 @@ function squid_resync() {
 	squid_resync_users();
 	squid_write_rcfile();
 
-	/* make sure pinger is executable */
+	/* make sure pinger is executable and suid root */
+	// XXX: Bug #5114
 	if(file_exists(SQUID_LOCALBASE . "/libexec/squid/pinger"))
-		exec("chmod a+x " . SQUID_LOCALBASE . "/libexec/squid/pinger");
+		exec("/bin/chmod a+x " . SQUID_LOCALBASE . "/libexec/squid/pinger");
+		exec("/bin/chmod u+s " . SQUID_LOCALBASE . "/libexec/squid/pinger");
 
 	foreach (array(	SQUID_CONFBASE,
 			SQUID_ACLDIR,

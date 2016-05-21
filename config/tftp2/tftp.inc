@@ -28,6 +28,9 @@
 	ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 	POSSIBILITY OF SUCH DAMAGE.
 */
+require_once("filter.inc");
+require_once("util.inc");
+
 function tftp_byte_convert($bytes) {
 	if ($bytes <= 0) {
 		return '0 Byte';
@@ -36,6 +39,19 @@ function tftp_byte_convert($bytes) {
 	$s = array('B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB');
 	$e = floor(log($bytes, $convention));
 	return round($bytes/pow($convention, $e), 2) . ' ' . $s[$e];
+}
+
+function tftp_dir_contains_files($dir) {
+	if (!is_readable($dir)) {
+		return NULL;
+	}
+	$handle = opendir($dir);
+	while (false !== ($entry = readdir($handle))) {
+		if ($entry != "." && $entry != "..") {
+			return TRUE;
+		}
+	}
+	return FALSE;
 }
 
 function tftp_install_command() {
@@ -50,10 +66,12 @@ function tftp_install_command() {
 
 	// Restore backup if it exists
 	if (file_exists($tftpbackup)) {
-		system("/usr/bin/tar xvpfz {$tftpbackup} -C /");
-		system("/bin/chmod -R 0744 {$tftpdir}/*");
-		unset($tftpbackup);
+		mwexec("/usr/bin/tar xvpfz {$tftpbackup} -C /");
+		if (tftp_dir_contains_files($tftpdir)) {
+			mwexec("/bin/chmod -R 0744 {$tftpdir}/*");
+		}
 	}
+	unset($tftpdir, $tftpbackup);
 }
 
 function tftp_deinstall_command() {
@@ -68,11 +86,9 @@ function tftp_generate_rules($type) {
 		return;
 	}
 
-	// Open inetd.conf write handle
+	// Add tftpd daemon to inetd
 	$inetd_fd = fopen("/var/etc/inetd.conf", "a+");
-	// Add tftp daemon
 	fwrite($inetd_fd, "tftp\t\tdgram\tudp\twait\t\troot\t/usr/libexec/tftpd\ttftpd /tftpboot\n");
-	// Close file handle
 	fclose($inetd_fd);
 
 	if (!empty($config['installedpackages']['tftpd']['config'][0]['tftpdinterface'])) {

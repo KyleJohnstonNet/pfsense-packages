@@ -45,7 +45,7 @@
 	<name>havp</name>
 	<title>Antivirus: HTTP proxy (HAVP + ClamAV)</title>
 	<category>Status</category>
-	<version>1.06</version>
+	<version>1.10.0</version>
 	<include_file>/usr/local/pkg/havp.inc</include_file>
 	<menu>
 		<name>Antivirus</name>
@@ -99,7 +99,11 @@
 		</tab>
 		<tab>
 			<text>HAVP Log</text>
-			<url>/havp_log.php</url>
+			<url>/havp_log.php?logtab=havp</url>
+		</tab>
+		<tab>
+			<text>Clamd Log</text>
+			<url>/havp_log.php?logtab=clamd</url>
 		</tab>
 	</tabs>
 	<fields>
@@ -208,9 +212,11 @@
 				 <option><value>es</value><name>Spanish</name></option>
 				 <option><value>fr</value><name>French</name></option>
 				 <option><value>it</value><name>Italian</name></option>
-				 <option><value>nf</value><name>Norf'k</name></option>
+				 <option><value>nl</value><name>Dutch</name></option>
+				 <option><value>pf</value><name>Norf'k</name></option>
 				 <option><value>pl</value><name>Polish</name></option>
 				 <option><value>ru</value><name>Russian</name></option>
+				 <option><value>sv</value><name>Swedish</name></option>
 			</options>
 		</field>
 		<field>
@@ -375,4 +381,7 @@
 	<custom_php_deinstall_command>
 		havp_deinstall();
 	</custom_php_deinstall_command>
+	<filter_rules_needed>
+		havp_generate_rules
+	</filter_rules_needed>
 </packagegui>

@@ -35,6 +35,7 @@ require_once("haproxy.inc");
 require_once("certs.inc");
 require_once("haproxy_utils.inc");
 require_once("pkg_haproxy_tabs.inc");
+require_once("haproxy_gui.inc");
 
 $changedesc = "Services: HAProxy: Frontends";
 
@@ -85,7 +86,8 @@ if ($_GET['act'] == "del") {
 	if (isset($a_frontend[$id])) {
 		if (!$input_errors) {
 			unset($a_frontend[$id]);
-			write_config();
+			$changedesc .= " Frontend delete";
+			write_config($changedesc);
 			touch($d_haproxyconfdirty_path);
 		}
 		header("Location: haproxy_listeners.php");
@@ -93,9 +95,31 @@ if ($_GET['act'] == "del") {
 	}
 }
 
+function haproxy_userlist_backend_servers($backendname) {
+	//used for hint title text when hovering mouse over a backend name
+	global $a_servermodes;
+	$backend_servers = "";
+	$backend = get_backend($backendname);
+	if ($backend && is_array($backend['ha_servers']) && is_array($backend['ha_servers']['item'])){
+		$servers = $backend['ha_servers']['item'];
+		$backend_servers = sprintf(gettext("Servers in \"%s\" pool:"), $backendname);
+		if (is_array($servers)){
+			foreach($servers as $server){
+				$srvstatus = $server['status'];
+				$status = $a_servermodes[$srvstatus]['sign'];
+				if (isset($server['forwardto']) && $server['forwardto'] != "")
+					$backend_servers .= "\n{$status}[{$server['forwardto']}]";
+				else								
+					$backend_servers .= "\n{$status}{$server['address']}:{$server['port']}";
+			}
+		}
+	}
+	return $backend_servers;
+}
+
 $pgtitle = "Services: HAProxy: Frontends";
 include("head.inc");
-
+haproxy_css();
 ?>
 <body link="#0000CC" vlink="#0000CC" alink="#0000CC">
 <?php include("fbegin.inc"); ?>
@@ -110,23 +134,24 @@ echo "<br/></div>";
 ?>
 <script type="text/javascript" language="javascript" src="/javascript/haproxy_geturl.js"></script>
 <script language="javascript">
-function toggle_on(button, image) {
-	var item = document.getElementById(button);
-	item.src = image;
+function set_content(elementid, image) {
+	var item = document.getElementById(elementid);
+	item.innerHTML = image;
 }
 
 function js_callback(req) {
 	showapplysettings.style.display = 'block';
+	
 	if(req.content != '') {
 		var itemsplit = req.content.split("|");
 		buttonid = itemsplit[0];
 		enabled = itemsplit[1];
 		if (enabled == 1){
-			img = 'pass';
+			img = "<?=haproxyicon("enabled", gettext("click to toggle enable/disable this frontend"))?>";
 		} else {
-			img = 'reject';
+			img = "<?=haproxyicon("disabled", gettext("click to toggle enable/disable this frontend"))?>";
 		}
-		toggle_on('btn_'+buttonid, './themes/<?=$g['theme'];?>/images/icons/icon_'+img+'.gif');
+		set_content('btn_'+buttonid, img);
 	}
 }
 </script>
@@ -175,14 +200,11 @@ function js_callback(req) {
 		}
 		ksort($a_frontend_grouped);
 		
-		$img_cert = "/themes/{$g['theme']}/images/icons/icon_frmfld_cert.png";
-		$img_adv = "/themes/{$g['theme']}/images/icons/icon_advanced.gif";
-		$img_acl = "/themes/{$g['theme']}/images/icons/icon_ts_rule.gif";
 		$textgray = "";
 		$first = true;		
 		$last_frontend_shared = false;
 		foreach ($a_frontend_grouped as $a_frontend) {
-			usort($a_frontend,'sort_sharedfrontends');
+			usort($a_frontend, 'sort_sharedfrontends');
 			if ((count($a_frontend) > 1 || $last_frontend_shared) && !$first) {
 				?> <tr class="<?=$textgray?>"><td colspan="7">&nbsp;</td></tr> <?	
 			}
@@ -196,13 +218,12 @@ function js_callback(req) {
 				  <td class="listlr" ondblclick="document.location='haproxy_listeners_edit.php?id=<?=$frontendname;?>';">
 					<?
 						if ($frontend['status']=='disabled'){
-							$iconfn = "reject";
+							$iconfn = "disabled";
 						} else {
-							$iconfn = "pass";
+							$iconfn = "enabled";
 						}?>
-					<a href='javascript:getURL("?id=<?=$frontendname;?>&amp;action=toggle&amp;", js_callback);'>
-						<img id="btn_<?=$frontendname;?>" src="./themes/<?= $g['theme']; ?>/images/icons/icon_<?=$iconfn;?>.gif" width="11" height="11" border="0" 
-						title="<?=gettext("click to toggle enable/disable this frontend");?>" alt="icon" />
+					<a id="btn_<?=$frontendname;?>" href='javascript:getURL("?id=<?=$frontendname;?>&amp;action=toggle&amp;", js_callback);'>
+						<?=haproxyicon($iconfn, gettext("click to toggle enable/disable this frontend"))?>
 					</a>
 				  </td>
 				  <td class="listr" style="<?=$frontend['secondary']=='yes'?"visibility:hidden;":""?>" ondblclick="document.location='haproxy_listeners_edit.php?id=<?=$frontendname;?>';">
@@ -213,11 +234,12 @@ function js_callback(req) {
 					$acls = get_frontend_acls($frontend);
 					$isaclset = "";
 					foreach ($acls as $acl) {
-						$isaclset .= "&#10;" . htmlspecialchars($acl['descr']);
+						$isaclset .= "\n" . htmlspecialchars($acl['descr']);
 					}
-					if ($isaclset) 
-						echo "<img src=\"$img_acl\" title=\"" . gettext("acl's used") . ": {$isaclset}\" border=\"0\" />";
-						
+					if ($isaclset) {
+						echo haproxyicon("acl", gettext("acl's used") . ": {$isaclset}");
+					}
+					
 					if (get_frontend_uses_ssl($frontend)) {
 						$cert = lookup_cert($frontend['ssloffloadcert']);
 						$descr = htmlspecialchars($cert['descr']);
@@ -230,31 +252,14 @@ function js_callback(req) {
 								}
 							}
 						}
-						echo '<img src="'.$img_cert.'" title="SSL offloading cert: '.$descr.'" alt="SSL offloading" border="0" height="16" width="16" />';
+						echo haproxyicon("cert", "SSL offloading cert: {$descr}");
 					}
 					
 					$isadvset = "";
 					if ($frontend['advanced_bind']) $isadvset .= "Advanced bind: ".htmlspecialchars($frontend['advanced_bind'])."\r\n";
 					if ($frontend['advanced']) $isadvset .= "Advanced pass thru setting used\r\n";
-					if ($isadvset)
-						echo "<img src=\"$img_adv\" title=\"" . gettext("Advanced settings set") . ": {$isadvset}\" border=\"0\" />";
-					
-					$backend_serverpool_hint = "";
-					$backend_serverpool = $frontend['backend_serverpool'];
-					$backend = get_backend($backend_serverpool);
-					if ($backend && is_array($backend['ha_servers']) && is_array($backend['ha_servers']['item'])){
-						$servers = $backend['ha_servers']['item'];
-						$backend_serverpool_hint = gettext("Servers in pool:");
-						if (is_array($servers)){
-							foreach($servers as $server){
-								$srvstatus = $server['status'];
-								$status = $a_servermodes[$srvstatus]['sign'];
-								if (isset($server['forwardto']) && $server['forwardto'] != "")
-									$backend_serverpool_hint .= "\n{$status}[{$server['forwardto']}]";
-								else								
-									$backend_serverpool_hint .= "\n{$status}{$server['address']}:{$server['port']}";
-							}
-						}
+					if ($isadvset) {
+						echo haproxyicon("advanced", gettext("Advanced settings set") . ": {$isadvset}");
 					}
 					?>
 				  </td>
@@ -273,7 +278,7 @@ function js_callback(req) {
 							print "<div style='white-space:nowrap;'>";
 							print "{$addr['addr']}:{$addr['port']}";
 							if ($addr['ssl'] == 'yes') {
-								echo '<img src="'.$img_cert.'" title="SSL offloading" alt="SSL" border="0" height="11" width="11" />';
+								echo haproxyicon("cert", "SSL offloading");
 							}
 							print "</div";
 							$first = false;
@@ -296,21 +301,42 @@ function js_callback(req) {
 				  ?>
 				  </td>
 				  <td class="listr" ondblclick="document.location='haproxy_listeners_edit.php?id=<?=$frontendname;?>';">
-					<div title='<?=$backend_serverpool_hint;?>'>
-					<a href="haproxy_pool_edit.php?id=<?=$frontend['backend_serverpool']?>">
-					<?=$frontend['backend_serverpool']?>
-					</a>
-					</div>
+					<?
+					if (is_array($frontend['a_actionitems']['item'])) {
+						foreach ($frontend['a_actionitems']['item'] as $actionitem) {
+							if ($actionitem['action'] == "use_backend") {
+								$backend = $actionitem['use_backendbackend'];
+								$hint = haproxy_userlist_backend_servers($backend);
+								echo "<div title='{$hint}'>";
+								echo "<a href='haproxy_pool_edit.php?id={$backend}'>{$backend}</a>";
+								if (!empty($actionitem['acl'])) {
+									echo "&nbsp;if({$actionitem['acl']})";
+								}
+								echo "<br/></div>";
+							}
+						}
+					}
+					$hint = haproxy_userlist_backend_servers($frontend['backend_serverpool']);
+					$backend = $frontend['backend_serverpool'];
+					if (!empty($backend)) {
+						echo "<div title='{$hint}'>";
+						echo "<a href='haproxy_pool_edit.php?id={$backend}'>{$backend}</a> (default)";
+						echo "<br/></div>";
+					}
+					?>
 				  </td>
-				  <!--td class="listlr" ondblclick="document.location='haproxy_listeners_edit.php?id=<?=$frontendname;?>';">
-					<?=$frontend['secondary'] == 'yes' ? $frontend['primary_frontend'] : "";?>
-				  </td-->
 				  <td class="list" nowrap>
 					<table border="0" cellspacing="0" cellpadding="1">
 					  <tr>
-						<td valign="middle"><a href="haproxy_listeners_edit.php?id=<?=$frontendname;?>"><img src="/themes/<?= $g['theme']; ?>/images/icons/icon_e.gif"  title="<?=gettext("edit frontend");?>" width="17" height="17" border="0" /></a></td>
-						<td valign="middle"><a href="haproxy_listeners.php?act=del&amp;id=<?=$frontendname;?>" onclick="return confirm('Do you really want to delete this entry?')"><img src="/themes/<?= $g['theme']; ?>/images/icons/icon_x.gif" title="<?=gettext("delete frontend");?>"  width="17" height="17" border="0" /></a></td>
-						<td valign="middle"><a href="haproxy_listeners_edit.php?dup=<?=$frontendname;?>"><img src="/themes/<?= $g['theme']; ?>/images/icons/icon_plus.gif" title="<?=gettext("clone frontend");?>" width="17" height="17" border="0" /></a></td>
+						<td valign="middle"><a href="haproxy_listeners_edit.php?id=<?=$frontendname;?>">
+						<?=haproxyicon("edit", gettext("edit frontend"))?>
+						</a></td>
+						<td valign="middle"><a href="haproxy_listeners.php?act=del&amp;id=<?=$frontendname;?>" onclick="return confirm('Do you really want to delete this entry?')">
+						<?=haproxyicon("delete", gettext("delete frontend"))?>
+						</a></td>
+						<td valign="middle"><a href="haproxy_listeners_edit.php?dup=<?=$frontendname;?>">
+						<?=haproxyicon("clone", gettext("clone frontend"))?>
+						</a></td>
 					  </tr>
 					</table>
 				  </td>
@@ -323,7 +349,9 @@ function js_callback(req) {
 			  <td class="list">
 				<table border="0" cellspacing="0" cellpadding="1">
 				  <tr>
-					<td valign="middle"><a href="haproxy_listeners_edit.php"><img src="/themes/<?= $g['theme']; ?>/images/icons/icon_plus.gif" title="<?=gettext("add new frontend");?>"  width="17" height="17" border="0" /></a></td>
+					<td valign="middle"><a href="haproxy_listeners_edit.php">
+						<?=haproxyicon("add", gettext("add new frontend"))?>
+					</a></td>
 				  </tr>
 				</table>
 			  </td>

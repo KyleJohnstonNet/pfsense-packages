@@ -1,19 +1,12 @@
 <?php
-/* copyright */
-/* ========================================================================== */
 /*
 	freeradius.inc
-	part of pfSense (http://www.pfSense.com)
+	part of pfSense (https://www.pfSense.org/)
 	Copyright (C) 2013 Alexander Wilke <nachtfalkeaw@web.de>
 	Copyright (C) 2013 Marcello Coutinho
+	Copyright (C) 2015 ESF, LLC
 	All rights reserved.
 
-	Based on m0n0wall (http://m0n0.ch/wall)
-	Copyright (C) 2003-2006 Manuel Kasper <mk@neon1.net>.
-	All rights reserved.
-									      */
-/* ========================================================================== */
-/*
 	Redistribution and use in source and binary forms, with or without
 	modification, are permitted provided that the following conditions are met:
 
@@ -34,17 +27,18 @@
 	CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 	ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 	POSSIBILITY OF SUCH DAMAGE.
-									      */
-/* ========================================================================== */
-
-require_once('config.inc');
-require_once('service-utils.inc');
-require_once("util.inc");
-require_once("functions.inc");
-require_once("pkg-utils.inc");
-require_once("globals.inc");
+*/
+require_once("config.inc");
 require_once("filter.inc");
+require_once("functions.inc");
+require_once("globals.inc");
+require_once("notices.inc");
+require_once("pkg-utils.inc");
 require_once("services.inc");
+require_once("service-utils.inc");
+require_once("util.inc");
+require_once("xmlrpc.inc");
+require_once("xmlrpc_client.inc");
 
 // Check pfSense version
 $pfs_version = substr(trim(file_get_contents("/etc/version")),0,3);
@@ -144,6 +138,7 @@ function freeradius_install_command() {
 	freeradius_sqlconf_resync();
 	freeradius_eapconf_resync();
 	freeradius_clients_resync();
+	freeradius_modulesldap_resync();
 
 	$rcfile = array();
 	$rcfile['file'] = 'radiusd.sh';
@@ -630,7 +625,7 @@ if (is_array($arrusers) && !empty($arrusers)) {
 	// If an octet limit is NOT set we delete the files for the limit and the counter.
 	else {
 		if (file_exists("/var/log/radacct/datacounter/$varusersmaxtotaloctetstimerange/max-octets-$varusersusername")) { unlink("/var/log/radacct/datacounter/$varusersmaxtotaloctetstimerange/max-octets-$varusersusername"); }
-		if (file_exists("/var/log/radacct/datacounter/$varusersmaxtotaloctetstimerange/used-octets-$varusersusername")) { unlink("/var/log/radacct/datacounter/$varusersmaxtotaloctetstimerange/used-octets-$varusersusername"); }
+		if (file_exists("/var/log/radacct/datacounter/$varusersmaxtotaloctetstimerange/used-octets-$varusersusername")) { unlink("/var/log/radacct/datacounter/$varusersmaxtotaloctetstimerange/used-octets-$varusersusername*"); }
 	}
 	if ($varusersadditionaloptionsreplyitems != '') {
 		if ($varusersreplyitem != '') { $varusersreplyitem .=","; }
@@ -824,7 +819,7 @@ if (is_array($arrmacs) && !empty($arrmacs)) {
 	// If an octet limit is NOT set we delete the files for the limit and the counter.
 	else {
 		if (file_exists("/var/log/radacct/datacounter/$varmacsmaxtotaloctetstimerange/max-octets-$varmacsaddress")) { unlink("/var/log/radacct/datacounter/$varmacsmaxtotaloctetstimerange/max-octets-$varmacsaddress"); }
-		if (file_exists("/var/log/radacct/datacounter/$varmacsmaxtotaloctetstimerange/used-octets-$varmacsaddress")) { unlink("/var/log/radacct/datacounter/$varmacsmaxtotaloctetstimerange/used-octets-$varmacsaddress"); }
+		if (file_exists("/var/log/radacct/datacounter/$varmacsmaxtotaloctetstimerange/used-octets-$varmacsaddress")) { unlink("/var/log/radacct/datacounter/$varmacsmaxtotaloctetstimerange/used-octets-$varmacsaddress*"); }
 	}
 	if ($varmacsadditionaloptionsreplyitems != '') {
 		if ($varmacsreplyitem != '') { $varmacsreplyitem .=","; }
@@ -2571,163 +2566,181 @@ conf_mount_ro();
 
 /* Uses XMLRPC to synchronize the changes to a remote node */
 function freeradius_sync_on_changes() {
-	global $config, $g;
-	if (is_array($config['installedpackages']['freeradiussync'])){
+	global $config;
+
+	if (is_array($config['installedpackages']['freeradiussync'])) {
 		$synconchanges = $config['installedpackages']['freeradiussync']['config'][0]['varsyncenablexmlrpc'];
-		$varsynctimeout = $config['installedpackages']['freeradiussync']['config'][0]['varsynctimeout'];
-		}
-	else
-	{
+		$varsynctimeout = $config['installedpackages']['freeradiussync']['config'][0]['varsynctimeout'] ?: '150';
+	} else {
 		return;
 	}
 
 	// if checkbox is NOT checked do nothing
-	switch ($synconchanges){
+	switch ($synconchanges) {
 		case "manual":
-			if (is_array($config['installedpackages']['freeradiussync']['config'][0]['row'])){
-				$rs=$config['installedpackages']['freeradiussync']['config'][0]['row'];
-				}
-			else{
-				log_error("[FreeRADIUS]: xmlrpc sync is enabled but there is no hosts to push on FreeRADIUS config.");
+			if (is_array($config['installedpackages']['freeradiussync']['config'][0]['row'])) {
+				$rs = $config['installedpackages']['freeradiussync']['config'][0]['row'];
+			} else {
+				log_error("[FreeRADIUS]: XMLRPC sync is enabled but there are no hosts configured as replication targets.");
 				return;
-				}
+			}
 			break;
 		case "auto":
-				if (is_array($config['installedpackages']['carpsettings']) && is_array($config['installedpackages']['carpsettings']['config'])){
-					$system_carp=$config['installedpackages']['carpsettings']['config'][0];
-					$rs[0]['varsyncdestinenable']="on";
-					$rs[0]['varsyncprotocol']=($config['system']['webgui']['protocol']!=""?$config['system']['webgui']['protocol']:"https");
-					$rs[0]['varsyncipaddress']=$system_carp['synchronizetoip'];
-					$rs[0]['varsyncpassword']=$system_carp['password'];
-					$rs[0]['varsyncport']=($config['system']['webgui']['port']!=""?$config['system']['webgui']['port']:"443");
-					if (! is_ipaddr($system_carp['synchronizetoip'])){
-						log_error("[FreeRADIUS]: xmlrpc sync is enabled but there is no system backup hosts to push FreeRADIUS config.");
-						return;
-						}
+			if (is_array($config['hasync'])) {
+				$system_carp = $config['hasync'];
+				$rs[0]['varsyncipaddress'] = $system_carp['synchronizetoip'];
+				$rs[0]['varsyncusername'] = $system_carp['username'];
+				$rs[0]['varsyncpassword'] = $system_carp['password'];
+				$rs[0]['varsyncdestinenable'] = FALSE;
+
+				// XMLRPC sync is currently only supported over connections using the same protocol and port as this system
+				if ($config['system']['webgui']['protocol'] == "http") {
+					$rs[0]['varsyncprotocol'] = "http";
+					$rs[0]['varsyncport'] = $config['system']['webgui']['port'] ?: '80';
+				} else {
+					$rs[0]['varsyncprotocol'] = "https";
+					$rs[0]['varsyncport'] = $config['system']['webgui']['port'] ?: '443';
 				}
-				else{
-					log_error("[FreeRADIUS]: xmlrpc sync is enabled but there is no system backup hosts to push FreeRADIUS config.");
+				if ($system_carp['synchronizetoip'] == "") {
+					log_error("[FreeRADIUS]: XMLRPC CARP/HA sync is enabled but there are no system backup hosts configured as replication targets.");
 					return;
+				} else {
+					$rs[0]['varsyncdestinenable'] = TRUE;
 				}
+			} else {
+				log_error("[FreeRADIUS]: XMLRPC CARP/HA sync is enabled but there are no system backup hosts configured as replication targets.");
+				return;
+			}
 			break;		
 		default:
 			return;
-		break;
-		}
-		if (is_array($rs)){
-			log_error("[FreeRADIUS]: xmlrpc sync is starting with timeout {$varsynctimeout} seconds.");
-			foreach($rs as $sh){
-				if($sh['varsyncdestinenable']){
-					$varsyncprotocol 	= $sh['varsyncprotocol'];
-					$sync_to_ip 		= $sh['varsyncipaddress'];
-					$password   		= $sh['varsyncpassword'];
-					$varsyncport 		= $sh['varsyncport'];
-					if($password && $sync_to_ip)
-						freeradius_do_xmlrpc_sync($sync_to_ip, $password, $varsyncport, $varsyncprotocol,$varsynctimeout);
-					else
-						log_error("[FreeRADIUS]: XMLRPC Sync with {$sh['varsyncipaddress']} has incomplete credentials. No XMLRPC Sync done!");
+			break;
+	}
+	if (is_array($rs)) {
+		log_error("[FreeRADIUS]: XMLRPC sync is starting with timeout {$varsynctimeout} seconds.");
+		foreach ($rs as $sh) {
+			if ($sh['varsyncdestinenable']) {
+				$sync_to_ip = $sh['varsyncipaddress'];
+				$varsyncport = $sh['varsyncport'];
+				$varsyncprotocol = $sh['varsyncprotocol'];
+				$username = $sh['varsyncusername'] ?: 'admin';
+				$password = $sh['varsyncpassword'];
+
+				$error = '';
+				$valid = TRUE;
+
+				if ($password == "") {
+					$error = "Password parameter is empty. ";
+					$valid = FALSE;
 				}
-				else {
+				if (!is_ipaddr($sync_to_ip) && !is_hostname($sync_to_ip) && !is_domain($sync_to_ip)) {
+					$error .= "Misconfigured Replication Target IP Address or Hostname. ";
+					$valid = FALSE;
+				}
+				if (!is_port($varsyncport)) {
+					$error .= "Misconfigured Replication Target Port. ";
+					$valid = FALSE;
+				}
+				if ($valid) {
+					freeradius_do_xmlrpc_sync($sync_to_ip, $username, $password, $varsyncport, $varsyncprotocol, $varsynctimeout);
+				} else {
+					log_error("[FreeRADIUS]: XMLRPC Sync with '{$sync_to_ip}' aborted due to the following error(s): {$error}");
+				}
+			} else {
 				log_error("[FreeRADIUS]: XMLRPC Sync with {$sh['varsyncipaddress']} is disabled");
-				}
 			}
-			log_error("[FreeRADIUS]: xmlrpc sync is ending.");
-			}
+		}
+		log_error("[FreeRADIUS]: XMLRPC sync is ending.");
+	}
 }
 
 /* Do the actual XMLRPC sync */
-function freeradius_do_xmlrpc_sync($sync_to_ip, $password, $varsyncport, $varsyncprotocol,$varsynctimeout) {
+function freeradius_do_xmlrpc_sync($sync_to_ip, $username, $password, $varsyncport, $varsyncprotocol, $varsynctimeout) {
 	global $config, $g;
 
-	if($varsynctimeout == '' || $varsynctimeout == 0)
-		$varsynctimeout = 150;
-
-	if(!$password)
+	/* Detect boot process, do nothing during boot. */
+	if (function_exists("platform_booting")) {
+		if (platform_booting()) {
+			return;
+		}
+	} elseif ($g['booting']) {
 		return;
+	}
 
-	if(!$sync_to_ip)
+	if ($username == "" || $password == "" || $sync_to_ip == "" || $varsyncport == "" || $varsyncprotocol == "") {
+		log_error("[FreeRADIUS]: A required XMLRPC sync parameter (username, password, replication target, port or protocol) is empty ... aborting pkg sync");
 		return;
-	
-	if(!$varsyncport)
-		return;
+	}
 
-	if(!$varsyncprotocol)
-		return;
-	
-	// Check and choose correct protocol type, port number and IP address
-	$synchronizetoip .= "$varsyncprotocol" . '://';
-	$port = "$varsyncport";
+	/* Take care of IPv6 literal address */
+	if (is_ipaddrv6($sync_to_ip)) {
+		$sync_to_ip = "[{$sync_to_ip}]";
+	}
 
-	$synchronizetoip .= $sync_to_ip;
+	$url = "{$varsyncprotocol}://{$sync_to_ip}";
+	$port = $varsyncport;
 
-	/* xml will hold the sections to sync */
+	/* XML will hold the sections to sync. */
 	$xml = array();
 	$xml['freeradius'] = $config['installedpackages']['freeradius'];
 	$xml['freeradiusauthorizedmacs'] = $config['installedpackages']['freeradiusauthorizedmacs'];
 	$xml['freeradiusclients'] = $config['installedpackages']['freeradiusclients'];
 	
-	/* assemble xmlrpc payload */
-	$params = array(
-		XML_RPC_encode($password),
-		XML_RPC_encode($xml)
-	);
+	/* Assemble XMLRPC payload. */
+	$params = array(XML_RPC_encode($password), XML_RPC_encode($xml));
 
-	/* set a few variables needed for sync code borrowed from filter.inc */
-	$url = $synchronizetoip;
+	/* Set a few variables needed for sync code */
 	log_error("[FreeRADIUS]: Beginning FreeRADIUS XMLRPC sync with {$url}:{$port}.");
 	$method = 'pfsense.merge_installedpackages_section_xmlrpc';
 	$msg = new XML_RPC_Message($method, $params);
 	$cli = new XML_RPC_Client('/xmlrpc.php', $url, $port);
-	$cli->setCredentials('admin', $password);
-		if($g['debug'])
-			$cli->setDebug(1);
-		/* send our XMLRPC message and timeout after $varsynctimeout seconds */
+	$cli->setCredentials($username, $password);
+	if ($g['debug']) {
+		$cli->setDebug(1);
+	}
+	/* Send our XMLRPC message and timeout after defined sync timeout value */
+	$resp = $cli->send($msg, $varsynctimeout);
+	if (!$resp) {
+		$error = "A communications error occurred while FreeRADIUS was attempting XMLRPC sync with {$url}:{$port}.";
+		log_error("[FreeRADIUS]: {$error}");
+		file_notice("sync_settings", $error, "FreeRADIUS Settings Sync", "");
+	} elseif ($resp->faultCode()) {
+		$cli->setDebug(1);
 		$resp = $cli->send($msg, $varsynctimeout);
-		if(!$resp) {
-			$error = "A communications error occurred while FreeRADIUS was attempting XMLRPC sync with {$url}:{$port}.";
-			log_error("[FreeRADIUS]: $error");
-			file_notice("sync_settings", $error, "FreeRADIUS Settings Sync", "");
-		} elseif($resp->faultCode()) {
-			$cli->setDebug(1);
-			$resp = $cli->send($msg, $varsynctimeout);
-			$error = "An error code was received while FreeRADIUS XMLRPC was attempting to sync with {$url}:{$port} - Code " . $resp->faultCode() . ": " . $resp->faultString();
-			log_error("[FreeRADIUS]: $error");
-			file_notice("sync_settings", $error, "FreeRADIUS Settings Sync", "");
-		} else {
-			log_error("[FreeRADIUS]: XMLRPC has synced data successfully with {$url}:{$port}.");
-		}
+		$error = "An error code was received while FreeRADIUS XMLRPC was attempting to sync with {$url}:{$port} - Code " . $resp->faultCode() . ": " . $resp->faultString();
+		log_error("[FreeRADIUS]: {$error}");
+		file_notice("sync_settings", $error, "FreeRADIUS Settings Sync", "");
+	} else {
+		log_error("[FreeRADIUS]: XMLRPC has synced data successfully with {$url}:{$port}.");
+	}
 	
-	/* tell FreeRADIUS to reload our settings on the destionation sync host. */
+	/* Tell FreeRADIUS to reload our settings on the destionation sync host. */
 	$method = 'pfsense.exec_php';
 	$execcmd  = "require_once('/usr/local/pkg/freeradius.inc');\n";
-	// pfblocker just needed one fuction to reload after XMLRPC. FreeRADIUS needs more so we point to a fuction below which contains all fuctions
+	/* pfblocker just needed one fuction to reload after XMLRPC. FreeRADIUS needs more so we point to a fuction below which contains all fuctions */
 	$execcmd .= "freeradius_all_after_XMLRPC_resync();";
 	
-	/* assemble xmlrpc payload */
-	$params = array(
-		XML_RPC_encode($password),
-		XML_RPC_encode($execcmd)
-	);
+	/* Assemble XMLRPC payload. */
+	$params = array(XML_RPC_encode($password), XML_RPC_encode($execcmd));
 
 	log_error("[FreeRADIUS]: XMLRPC is reloading data on {$url}:{$port}.");
 	$msg = new XML_RPC_Message($method, $params);
 	$cli = new XML_RPC_Client('/xmlrpc.php', $url, $port);
-	$cli->setCredentials('admin', $password);
+	$cli->setCredentials($username, $password);
+	$resp = $cli->send($msg, $varsynctimeout);
+	if (!$resp) {
+		$error = "A communications error occurred while FreeRADIUS was attempting XMLRPC sync with {$url}:{$port} (exec_php).";
+		log_error("[FreeRADIUS]: {$error}");
+		file_notice("sync_settings", $error, "FreeRADIUS Settings Sync", "");
+	} elseif ($resp->faultCode()) {
+		$cli->setDebug(1);
 		$resp = $cli->send($msg, $varsynctimeout);
-		if(!$resp) {
-			$error = "A communications error occurred while FreeRADIUS was attempting XMLRPC sync with {$url}:{$port} (exec_php).";
-			log_error($error);
-			file_notice("sync_settings", $error, "FreeRADIUS Settings Sync", "");
-		} elseif($resp->faultCode()) {
-			$cli->setDebug(1);
-			$resp = $cli->send($msg, $varsynctimeout);
-			$error = "An error code was received while FreeRADIUS XMLRPC was attempting to sync with {$url}:{$port} - Code " . $resp->faultCode() . ": " . $resp->faultString();
-			log_error($error);
-			file_notice("sync_settings", $error, "FreeRADIUS Settings Sync", "");
-		} else {
-			log_error("[FreeRADIUS]: XMLRPC has reloaded data successfully on {$url}:{$port} (exec_php).");
-		}
-
+		$error = "An error code was received while FreeRADIUS XMLRPC was attempting to sync with {$url}:{$port} - Code " . $resp->faultCode() . ": " . $resp->faultString();
+		log_error("[FreeRADIUS]: {$error}");
+		file_notice("sync_settings", $error, "FreeRADIUS Settings Sync", "");
+	} else {
+		log_error("[FreeRADIUS]: XMLRPC has reloaded data successfully on {$url}:{$port} (exec_php).");
+	}
 }
 
 // This function restarts all other needed functions after XMLRPC so that the content of .XML + .INC will be written in the files (clients.conf, users)
@@ -2738,7 +2751,7 @@ function freeradius_all_after_XMLRPC_resync() {
 	freeradius_authorizedmacs_resync();
 	freeradius_clients_resync();
 	
-	log_error("FreeRADIUS: Finished XMLRPC process. It should be OK. For more information look at the host which started sync.");
+	log_error("[FreeRADIUS]: Finished XMLRPC process. It should be OK. For more information look at the host which started sync.");
 	
 	exec(FREERADIUS_ETC . "/rc.d/radiusd onerestart");
 }
@@ -4123,20 +4136,20 @@ function freeradius_modulesdatacounter_resync() {
 	$conf .= <<<EOD
 exec datacounterdaily {
 		wait = yes
-		program = "/bin/sh {$varFREERADIUS_ETC}/raddb/scripts/datacounter_acct.sh %{request:User-Name} daily %{request:Acct-Input-Octets} %{request:Acct-Output-Octets}"
+		program = "/bin/sh {$varFREERADIUS_ETC}/raddb/scripts/datacounter_acct.sh %{request:User-Name} daily %{request:Acct-Input-Octets} %{request:Acct-Output-Octets} %{request:Acct-Status-Type} %{request:Acct-Session-Id}"
 	}
 exec datacounterweekly {
 		wait = yes
-		program = "/bin/sh {$varFREERADIUS_ETC}/raddb/scripts/datacounter_acct.sh %{request:User-Name} weekly %{request:Acct-Input-Octets} %{request:Acct-Output-Octets}"
+		program = "/bin/sh {$varFREERADIUS_ETC}/raddb/scripts/datacounter_acct.sh %{request:User-Name} weekly %{request:Acct-Input-Octets} %{request:Acct-Output-Octets} %{request:Acct-Status-Type} %{request:Acct-Session-Id}"
 	}
 exec datacountermonthly {
 		wait = yes
-		program = "/bin/sh {$varFREERADIUS_ETC}/raddb/scripts/datacounter_acct.sh %{request:User-Name} monthly %{request:Acct-Input-Octets} %{request:Acct-Output-Octets}"
+		program = "/bin/sh {$varFREERADIUS_ETC}/raddb/scripts/datacounter_acct.sh %{request:User-Name} monthly %{request:Acct-Input-Octets} %{request:Acct-Output-Octets} %{request:Acct-Status-Type} %{request:Acct-Session-Id}"
 	}
 exec datacounterforever {
 		wait = yes
-		program = "/bin/sh {$varFREERADIUS_ETC}/raddb/scripts/datacounter_acct.sh %{request:User-Name} forever %{request:Acct-Input-Octets} %{request:Acct-Output-Octets}"
-	}	
+		program = "/bin/sh {$varFREERADIUS_ETC}/raddb/scripts/datacounter_acct.sh %{request:User-Name} forever %{request:Acct-Input-Octets} %{request:Acct-Output-Octets} %{request:Acct-Status-Type} %{request:Acct-Session-Id}"
+	}
 EOD;
 
 	$filename = FREERADIUS_ETC . '/raddb/modules/datacounter_acct';
@@ -4162,18 +4175,19 @@ TIMERANGE=`echo -n "\\$2" | sed 's/[^a-z]//g' `
 ### This is to make sure there is a used-octets file after the cronjob resetted the counter
 if [ -e "/var/log/radacct/datacounter/\$TIMERANGE/max-octets-\$USERNAME" ] && [ ! -e "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME" ]; then
 	echo 0 > "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME"
+	rm "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME-"*
 fi
 
 ### The next two lines are just for getting values for logging output
-MAXOCTETSUSERNAMEMB=$((`cat "/var/log/radacct/datacounter/\$TIMERANGE/max-octets-\$USERNAME"`/1024/1024))
-USEDOCTETSUSERNAMEMB=$((`cat "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME"`/1024/1024))
-	
+MAXOCTETSUSERNAMEMB=$((`/bin/cat "/var/log/radacct/datacounter/\$TIMERANGE/max-octets-\$USERNAME"`/1024/1024))
+USEDOCTETSUSERNAMEMB=`/bin/cat "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\${USERNAME}"* | /usr/bin/awk '{ SUM += \$1; } END { print int(SUM/1024/1024); }'`
+
 ### We check if MAX-OCTETS-USERNAME is greater than USED-OCTETS-USERNAME and accept or reject the user
-if [ `cat "/var/log/radacct/datacounter/\$TIMERANGE/max-octets-\$USERNAME"` -gt `cat "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME"` ]; then
-	logger -f /var/log/system.log "FreeRADIUS: Used amount of \$TIMERANGE traffic by \$USERNAME is \$USEDOCTETSUSERNAMEMB MB of \$MAXOCTETSUSERNAMEMB MB! The user was accepted!!!"
+if [ \$MAXOCTETSUSERNAMEMB -gt \$USEDOCTETSUSERNAMEMB ]; then
+	logger -f /var/log/system.log "FreeRADIUS: User \$USERNAME has used \$USEDOCTETSUSERNAMEMB MB of \$MAXOCTETSUSERNAMEMB MB \$TIMERANGE allotted traffic. The login request was accepted."
 	exit 0
 else
-	logger -f /var/log/system.log "FreeRADIUS: Credentials are probably correct but the user \$USERNAME has reached the \$TIMERANGE Amount of Upload and Download Traffic which is \$USEDOCTETSUSERNAMEMB MB of \$MAXOCTETSUSERNAMEMB MB! The user was rejected!!!"
+	logger -f /var/log/system.log "FreeRADIUS: User \$USERNAME has reached the \$TIMERANGE amount of upload and download traffic (\$USEDOCTETSUSERNAMEMB MB of \$MAXOCTETSUSERNAMEMB MB). The login request was denied."
 	exit 99
 fi
 EOD;
@@ -4198,6 +4212,8 @@ USERNAME=`echo -n "\\$1" | sed 's/[^0-9a-zA-Z.:_-]/X/g' `
 TIMERANGE=`echo -n "\\$2" | sed 's/[^a-z]//g' `
 ACCTINPUTOCTETS=`echo -n "\\$3" | sed 's/[^0-9]/0/g' `
 ACCTOUTPUTOCTETS=`echo -n "\\$4" | sed 's/[^0-9]/0/g' `
+UPDATETYPE=\$5
+SESSIONID=\$6
 
 ### If we do not get Octets we set some default values
 if [ ! \$ACCTINPUTOCTETS ]; then
@@ -4216,11 +4232,23 @@ else
 	if [ ! -e "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME" ]; then
 		echo 0 > "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME"
 	fi
-### The following two lines (chose the one or the other) are a bad workaround to make accounting accurate with stop/start accounting on pfsense 2.0.1 - it only works if the session will not be interrupted (host disconnects)
-###	USEDOCTETS=\$((\$ACCTINPUTOCTETS+\$ACCTOUTPUTOCTETS))
-	USEDOCTETS=\$((\$ACCTINPUTOCTETS+\$ACCTOUTPUTOCTETS+`cat "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME"`))
-	
-	echo "\$USEDOCTETS" > "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME"
+
+	USEDOCTETS=\$((\$ACCTINPUTOCTETS+\$ACCTOUTPUTOCTETS))
+
+	# If this is an interim update, track it in a separate session file
+	# since the incoming data is a gauge not a counter.
+	if [ \$UPDATETYPE = "Interim-Update" ]; then
+		echo \$USEDOCTETS > "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME-\$SESSIONID"
+	else
+		USEDOCTETS=\$((\$USEDOCTETS+`cat "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME"`))
+
+		# If there was a session file for this session (from interim updates) clear it since the equivalent
+		# value was just added to the total.
+		if [ -e "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME-\$SESSIONID" ]; then
+			rm "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME-\$SESSIONID"
+		fi
+		echo "\$USEDOCTETS" > "/var/log/radacct/datacounter/\$TIMERANGE/used-octets-\$USERNAME"
+	fi
 	exit 0
 fi
 

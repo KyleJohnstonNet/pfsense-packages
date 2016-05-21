@@ -41,9 +41,9 @@
 /* ====================================================================================== */
 	]]>
 	</copyright>
-	<name>Shellcmd Settings</name>
-	<version>1.0</version>
-	<title>Shellcmd Settings</title>
+	<name>shellcmdsettings</name>
+	<version>1.0.2</version>
+	<title>Services: Shellcmd Settings</title>
 	<include_file>/usr/local/pkg/shellcmd.inc</include_file>
 	<aftersaveredirect>/pkg.php?xml=shellcmd.xml</aftersaveredirect>
 	<addedit_string>[shellcmd] Successfully created/modified custom (early)shellcmd.</addedit_string>
@@ -54,17 +54,13 @@
 		<configfile>shellcmd.xml</configfile>
 		<url>/pkg.php?xml=shellcmd.xml</url>
 	</menu>
-	<tabs>
-		<tab>
-			<text>Settings</text>
-			<url>/pkg.php?xml=shellcmd.xml</url>
-			<active/>
-		</tab>
-	</tabs>
-	<configpath>['installedpackages']['shellcmdsettings']['config']</configpath>
 	<additional_files_needed>
 		<prefix>/usr/local/pkg/</prefix>
 		<item>https://packages.pfsense.org/packages/config/shellcmd/shellcmd.inc</item>
+	</additional_files_needed>
+	<additional_files_needed>
+		<prefix>/etc/inc/priv/</prefix>
+		<item>https://packages.pfsense.org/packages/config/shellcmd/shellcmd.priv.inc</item>
 	</additional_files_needed>
 	<adddeleteeditpagefields>
 		<columnitem>
@@ -124,8 +120,8 @@
 				Choose the shellcmd type.<br /><br />
 				<strong>shellcmd</strong> will run the command specified towards the end of the boot process.<br />
 				<strong>earlyshellcmd</strong> will run the command specified at the beginning of the boot process.<br />
-				<strong>afterfilterchangeshellcmd</strong> will run after each filter_configure() call.
-				See <a href="https://github.com/pfsense/pfsense/blob/master/etc/inc/filter.inc">filter.inc source code</a> for "documentation".
+				<strong>afterfilterchangeshellcmd</strong> will run after each filter_configure() call. 
+				See /etc/inc/filter.inc source code for "documentation".
 				<span class="errmsg">N.B.: Only one entry of this type can be configured!</span><br />
 				<strong>disabled</strong> will save the command in package configuration but it will NOT run on boot.<br /><br />
 				See <a href="https://doc.pfsense.org/index.php/Executing_commands_at_boot_time">Executing commands at boot time</a> for detailed explanation.

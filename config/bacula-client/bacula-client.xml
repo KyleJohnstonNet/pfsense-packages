@@ -44,7 +44,7 @@
 	</copyright>
 	<requirements>Bacula Server Installed on your network.</requirements>
 	<name>baculaclient</name>
-	<version>1.0.8</version>
+	<version>1.0.12</version>
 	<title>Bacula Client: Settings</title>
 	<aftersaveredirect>/pkg.php?xml=bacula-client.xml</aftersaveredirect>
 	<include_file>/usr/local/pkg/bacula-client.inc</include_file>
@@ -52,6 +52,10 @@
 	<additional_files_needed>
 		<prefix>/usr/local/pkg/</prefix>
 		<item>https://packages.pfsense.org/packages/config/bacula-client/bacula-client.inc</item>
+	</additional_files_needed>
+	<additional_files_needed>
+		<prefix>/etc/inc/priv/</prefix>
+		<item>https://packages.pfsense.org/packages/config/bacula-client/bacula-client.priv.inc</item>
 	</additional_files_needed>
 	<additional_files_needed>
 		<prefix>/usr/local/pkg/</prefix>
@@ -156,4 +160,7 @@
 	<custom_php_resync_config_command>
 		baculaclient_custom_php_write_config();
 	</custom_php_resync_config_command>
+	<custom_delete_php_command>
+		baculaclient_custom_php_write_config();
+	</custom_delete_php_command>
 </packagegui>

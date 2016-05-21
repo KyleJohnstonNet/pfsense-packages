@@ -27,6 +27,9 @@
 	ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 	POSSIBILITY OF SUCH DAMAGE.
 */
+
+require_once('service-utils.inc');
+
 //sort array
 function sort_host($a, $b) {
 	return strcmp($a["host"], $b["host"]);
@@ -270,7 +273,7 @@ EOF;
 
 					// Set the default port
 					if (strlen($port) == 0) {
-						$port = '8001';
+						$port = '10081';
 					}
 
 					if ($ipaddress . ':' . $port != $ipaddress_and_port_previous_value) {
